@@ -46,7 +46,7 @@ function buildTrayItems() {
 }
 
 // ─── DropZone ────────────────────────────────────────────────
-function DropZone({ panel, row, onMeasured, state }) {
+function DropZone({ panel, row, onMeasured, state, onTap, isValidTarget }) {
   const ref = useRef(null);
   const doMeasure = () =>
     ref.current?.measure((fx, fy, w, h, px, py) =>
@@ -54,14 +54,16 @@ function DropZone({ panel, row, onMeasured, state }) {
     );
 
   let bg = '#f0fffe', border = '#80cbc4', bs = 'dashed';
+  if (isValidTarget)              { bg = '#fffde7'; border = '#fbc02d'; bs = 'solid'; }
   if (state?.state === 'correct') { bg = '#e8f5e9'; border = '#43a047'; bs = 'solid'; }
   if (state?.state === 'wrong')   { bg = '#ffebee'; border = '#e53935'; bs = 'solid'; }
 
   return (
     <View ref={ref} onLayout={doMeasure}
+      onTouchEnd={() => onTap?.(panel, row)}
       style={[styles.dropZone, { backgroundColor: bg, borderColor: border, borderStyle: bs }]}>
       {state?.card && (
-        <View style={styles.placedCard}>
+        <View style={styles.placedCard} pointerEvents="none">
           <SvgXml xml={state.card.svg} width={SVG_SZ} height={SVG_SZ} />
           <Text style={styles.cardLabel} numberOfLines={2}>{state.card.label}</Text>
         </View>
@@ -172,23 +174,31 @@ export default function GameScreen() {
     for (let i = 0; i < 12; i++) { z.left[i] = null; z.right[i] = null; }
     return z;
   });
-  const [score, setScore]     = useState(0);
-  const [showWin, setShowWin] = useState(false);
+  const [score, setScore]       = useState(0);
+  const [showWin, setShowWin]   = useState(false);
+  const [selectedCard, setSelectedCard] = useState(null);
 
   const soundRef = useRef(null);
 
   useEffect(() => {
+    console.log('[GameScreen] mounted');
     let sound;
-    Audio.setAudioModeAsync({ playsInSilentModeIOS: true }).then(() =>
-      Audio.Sound.createAsync(
-        require('../../assets/0518.MP3'),
-        { isLooping: true, volume: 0.5 }
-      ).then(({ sound: s }) => {
+    Audio.setAudioModeAsync({ playsInSilentModeIOS: true })
+      .then(() => {
+        console.log('[Audio] setAudioModeAsync OK');
+        return Audio.Sound.createAsync(
+          require('../../assets/0518.MP3'),
+          { isLooping: true, volume: 0.5 }
+        );
+      })
+      .then(({ sound: s }) => {
+        console.log('[Audio] sound created OK');
         sound = s;
         soundRef.current = s;
-        s.playAsync();
+        return s.playAsync();
       })
-    );
+      .then(() => console.log('[Audio] playAsync OK'))
+      .catch((e) => console.error('[Audio] error:', e));
     return () => { sound?.unloadAsync(); };
   }, []);
 
@@ -278,11 +288,60 @@ export default function GameScreen() {
     });
   }, [zones, findZone]);
 
+  const onTapCard = useCallback((item) => {
+    setSelectedCard(prev => prev?.id === item.id ? null : item);
+  }, []);
+
+  const onTapZone = useCallback((panel, row) => {
+    if (!selectedCard) return;
+    const item = selectedCard;
+    if (panel === 'left'  && item.type !== 'tool') return;
+    if (panel === 'right' && item.type !== 'job')  return;
+    if (zones[panel][row]?.state === 'correct')    return;
+
+    setSelectedCard(null);
+    setZones((prev) => {
+      const next = { left: { ...prev.left }, right: { ...prev.right } };
+      if (next[panel][row]) setTrayItems((t) => [...t, next[panel][row].card]);
+      next[panel][row] = { card: item, pairId: item.pairId, state: 'placed' };
+      setTrayItems((t) => t.filter((c) => c.id !== item.id));
+
+      const L = panel === 'left'  ? next.left[row]  : prev.left[row];
+      const R = panel === 'right' ? next.right[row] : prev.right[row];
+      if (L && R) {
+        if (L.pairId === R.pairId) {
+          next.left[row]  = { ...L, state: 'correct' };
+          next.right[row] = { ...R, state: 'correct' };
+          setScore((s) => {
+            const n = s + 1;
+            if (n === 12) setTimeout(() => setShowWin(true), 400);
+            return n;
+          });
+        } else {
+          next.left[row]  = { ...L, state: 'wrong' };
+          next.right[row] = { ...R, state: 'wrong' };
+          setTimeout(() => {
+            setZones((z) => {
+              const n = { left: { ...z.left }, right: { ...z.right } };
+              const lC = n.left[row]?.card; const rC = n.right[row]?.card;
+              n.left[row] = null; n.right[row] = null;
+              if (lC) setTrayItems((t) => [...t, lC]);
+              if (rC) setTrayItems((t) => [...t, rC]);
+              return n;
+            });
+          }, 600);
+        }
+      }
+      return next;
+    });
+  }, [selectedCard, zones]);
+
   const handleReset = () => {
     setTrayItems(buildTrayItems());
     const z = { left: {}, right: {} };
     for (let i = 0; i < 12; i++) { z.left[i] = null; z.right[i] = null; }
-    setZones(z); setScore(0); setShowWin(false); setGhost(null); setTrayScrollEnabled(true);
+    setZones(z); setScore(0); setShowWin(false); setGhost(null);
+    setTrayScrollEnabled(true); setSelectedCard(null);
     soundRef.current?.replayAsync();
   };
 
@@ -321,7 +380,9 @@ export default function GameScreen() {
                 onStartDrag={startDrag}
                 onMoveDrag={moveDrag}
                 onEndDrag={endDrag}
+                onTap={onTapCard}
                 isDragging={ghost?.id === item.id}
+                isSelected={selectedCard?.id === item.id}
               />
             ))}
           </ScrollView>
@@ -333,7 +394,9 @@ export default function GameScreen() {
           <View style={styles.grid}>
             {Array.from({ length: 12 }, (_, i) => (
               <DropZone key={`left-${i}`} panel="left" row={i}
-                onMeasured={handleZoneMeasured} state={getZoneState('left', i)} />
+                onMeasured={handleZoneMeasured} state={getZoneState('left', i)}
+                onTap={onTapZone}
+                isValidTarget={selectedCard?.type === 'tool' && getZoneState('left', i)?.state !== 'correct'} />
             ))}
           </View>
         </View>
@@ -344,7 +407,9 @@ export default function GameScreen() {
           <View style={styles.grid}>
             {Array.from({ length: 12 }, (_, i) => (
               <DropZone key={`right-${i}`} panel="right" row={i}
-                onMeasured={handleZoneMeasured} state={getZoneState('right', i)} />
+                onMeasured={handleZoneMeasured} state={getZoneState('right', i)}
+                onTap={onTapZone}
+                isValidTarget={selectedCard?.type === 'job' && getZoneState('right', i)?.state !== 'correct'} />
             ))}
           </View>
         </View>
@@ -389,7 +454,7 @@ export default function GameScreen() {
 // (or vertical swipes) are passed through to the ScrollView.
 const DRAG_THRESHOLD = 6;
 
-function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, isDragging }) {
+function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, onTap, isDragging, isSelected }) {
   const touchStart = useRef(null);   // { x, y }
   const dragging   = useRef(false);
 
@@ -420,6 +485,8 @@ function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, isDragging }) {
     const { pageX, pageY } = e.nativeEvent;
     if (dragging.current) {
       onEndDrag(pageX, pageY);
+    } else {
+      onTap?.(item);
     }
     dragging.current = false;
     touchStart.current = null;
@@ -433,7 +500,7 @@ function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, isDragging }) {
 
   return (
     <View
-      style={[styles.traySlot, isDragging && styles.traySlotDragging]}
+      style={[styles.traySlot, isDragging && styles.traySlotDragging, isSelected && styles.traySlotSelected]}
       onTouchStart={onTouchStart}
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
@@ -513,6 +580,12 @@ const styles = StyleSheet.create({
     borderColor: '#ccc',
     shadowOpacity: 0,
     elevation: 0,
+  },
+  traySlotSelected: {
+    backgroundColor: '#fffde7',
+    borderColor: '#fbc02d',
+    borderStyle: 'solid',
+    borderWidth: 2.5,
   },
 
   panel: {
