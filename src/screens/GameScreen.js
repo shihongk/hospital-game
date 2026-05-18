@@ -60,10 +60,10 @@ function DropZone({ panel, row, onMeasured, state, onTap, isValidTarget }) {
 
   return (
     <View ref={ref} onLayout={doMeasure}
-      onTouchEnd={() => onTap?.(panel, row)}
+      onClick={() => onTap?.(panel, row)}
       style={[styles.dropZone, { backgroundColor: bg, borderColor: border, borderStyle: bs }]}>
       {state?.card && (
-        <View style={styles.placedCard} pointerEvents="none">
+        <View style={styles.placedCard}>
           <SvgXml xml={state.card.svg} width={SVG_SZ} height={SVG_SZ} />
           <Text style={styles.cardLabel} numberOfLines={2}>{state.card.label}</Text>
         </View>
@@ -484,9 +484,8 @@ function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, onTap, isDragging,
   const onTouchEnd = (e) => {
     const { pageX, pageY } = e.nativeEvent;
     if (dragging.current) {
+      e.preventDefault(); // suppress synthetic click after drag
       onEndDrag(pageX, pageY);
-    } else {
-      onTap?.(item);
     }
     dragging.current = false;
     touchStart.current = null;
@@ -498,6 +497,8 @@ function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, onTap, isDragging,
     touchStart.current = null;
   };
 
+  const onClick = () => { onTap?.(item); };
+
   return (
     <View
       style={[styles.traySlot, isDragging && styles.traySlotDragging, isSelected && styles.traySlotSelected]}
@@ -505,6 +506,7 @@ function TrayCard({ item, onStartDrag, onMoveDrag, onEndDrag, onTap, isDragging,
       onTouchMove={onTouchMove}
       onTouchEnd={onTouchEnd}
       onTouchCancel={onTouchCancel}
+      onClick={onClick}
     >
       {!isDragging && (
         <>
